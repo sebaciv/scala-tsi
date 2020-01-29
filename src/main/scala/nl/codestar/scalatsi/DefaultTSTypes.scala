@@ -16,16 +16,16 @@ trait CollectionTSTypes extends LowPriorityCollectionTSType {
   // This chooses null union to represent Option types.
   // When defining interfaces however Option will be represented with undefined union
   implicit def tsOption[E](implicit e: TSType[E]): TSType[Option[E]] =
-    TSType(e | TSNull)
+    TSType.transformed(e)(_ | TSNull)
 
   implicit def tsEither[L, R](implicit tsLeft: TSType[L], tsRight: TSType[R]): TSType[Either[L, R]] =
-    TSType(tsLeft | tsRight)
+    TSType.transformed2(tsLeft, tsRight)(_ | _)
 
   implicit def tsStringMap[E](implicit e: TSType[E]): TSType[Map[String, E]] =
-    TSType(TSIndexedInterface(indexType = TSString, valueType = e.get))
+    TSType.transformed(e)(t => TSIndexedInterface(indexType = TSString, valueType = t))
 
   implicit def tsIntMap[E](implicit e: TSType[E]): TSType[Map[Int, E]] =
-    TSType(TSIndexedInterface(indexType = TSNumber, valueType = e.get))
+    TSType.transformed(e)(t => TSIndexedInterface(indexType = TSNumber, valueType = t))
 }
 
 trait LowPriorityCollectionTSType {
@@ -34,7 +34,7 @@ trait LowPriorityCollectionTSType {
     implicit e: TSType[E],
     ev: F[E] <:< Iterable[E]
   ): TSType[F[E]] =
-    TSType(e.get.array)
+    TSType.transformed(e)(_.array)
 }
 
 trait JavaTSTypes {
@@ -57,7 +57,7 @@ trait JavaTSTypes {
   implicit def tsJavaCollection[E, F[_]](
     implicit e: TSType[E],
     ev: F[E] <:< java.util.Collection[E]
-  ): TSType[F[E]] = TSType(e.get.array)
+  ): TSType[F[E]] = TSType.transformed(e)(_.array)
 
   implicit val javaUriTSType: TSType[java.net.URI]    = TSType(TSString)
   implicit val javaUrlTSType: TSType[java.net.URL]    = TSType(TSString)
@@ -66,29 +66,35 @@ trait JavaTSTypes {
 
 trait TupleTSTypes {
   implicit def tsTuple1[T1](implicit t1: TSType[T1]): TSType[Tuple1[T1]] =
-    TSType(TSTuple.of(t1.get))
+    TSType.transformed(t1)(t => TSTuple.of(t))
+
   implicit def tsTuple2[T1, T2](implicit t1: TSType[T1], t2: TSType[T2]): TSType[(T1, T2)] =
-    TSType(TSTuple.of(t1.get, t2.get))
+    TSType.transformed2(t1, t2)(TSTuple.of(_, _))
+
   implicit def tsTuple3[T1, T2, T3](implicit t1: TSType[T1], t2: TSType[T2], t3: TSType[T3]): TSType[(T1, T2, T3)] =
-    TSType(TSTuple.of(t1.get, t2.get, t3.get))
-  implicit def tsTuple4[T1, T2, T3, T4](implicit t1: TSType[T1], t2: TSType[T2], t3: TSType[T3], t4: TSType[T4]): TSType[(T1, T2, T3, T4)] =
-    TSType(TSTuple.of(t1.get, t2.get, t3.get, t4.get))
-  implicit def tsTuple5[T1, T2, T3, T4, T5](
-    implicit t1: TSType[T1],
-    t2: TSType[T2],
-    t3: TSType[T3],
-    t4: TSType[T4],
-    t5: TSType[T5]
-  ): TSType[(T1, T2, T3, T4, T5)] =
-    TSType(TSTuple.of(t1.get, t2.get, t3.get, t4.get, t5.get))
-  implicit def tsTuple6[T1, T2, T3, T4, T5, T6](
-    implicit t1: TSType[T1],
-    t2: TSType[T2],
-    t3: TSType[T3],
-    t4: TSType[T4],
-    t5: TSType[T5],
-    t6: TSType[T6]
-  ): TSType[(T1, T2, T3, T4, T5, T6)] =
-    TSType(TSTuple.of(t1.get, t2.get, t3.get, t4.get, t5.get, t6.get))
+    TSType.transformed3(t1, t2, t3)(TSTuple.of(_, _, _))
+
+//  implicit def tsTuple4[T1, T2, T3, T4](implicit t1: TSType[T1], t2: TSType[T2], t3: TSType[T3], t4: TSType[T4]): TSType[(T1, T2, T3, T4)] =
+//    TSType.transformed(TSTuple.of(t1.get, t2.get, t3.get, t4.get))
+//
+//  implicit def tsTuple5[T1, T2, T3, T4, T5](
+//    implicit t1: TSType[T1],
+//    t2: TSType[T2],
+//    t3: TSType[T3],
+//    t4: TSType[T4],
+//    t5: TSType[T5]
+//  ): TSType[(T1, T2, T3, T4, T5)] =
+//    TSType.transformed(TSTuple.of(t1.get, t2.get, t3.get, t4.get, t5.get))
+//
+//  implicit def tsTuple6[T1, T2, T3, T4, T5, T6](
+//    implicit t1: TSType[T1],
+//    t2: TSType[T2],
+//    t3: TSType[T3],
+//    t4: TSType[T4],
+//    t5: TSType[T5],
+//    t6: TSType[T6]
+//  ): TSType[(T1, T2, T3, T4, T5, T6)] =
+//    TSType.transformed(TSTuple.of(t1.get, t2.get, t3.get, t4.get, t5.get, t6.get))
+
   // TODO: Tuple7-21
 }

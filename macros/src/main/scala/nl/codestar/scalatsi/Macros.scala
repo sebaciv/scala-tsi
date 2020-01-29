@@ -110,7 +110,7 @@ private[scalatsi] class Macros(val c: blackbox.Context) {
     }
 
     q"""{
-     import _root_.nl.codestar.scalatsi.TypescriptType.TSUndefined
+     import _root_.nl.codestar.scalatsi.TypescriptType.{TSUndefined, TSInterface}
      import _root_.nl.codestar.scalatsi.{TSNamedType, TSIType}
      import _root_.scala.collection.immutable.ListMap
      TSIType(TSInterface("I" + ${symbol.name.toString}, ListMap(
@@ -146,6 +146,7 @@ private[scalatsi] class Macros(val c: blackbox.Context) {
       case Seq(singleChild) =>
         q"""{
          import _root_.nl.codestar.scalatsi.TypescriptType
+         import _root_.nl.codestar.scalatsi.TypescriptType.{TSAlias}
          import _root_.nl.codestar.scalatsi.TSNamedType
          TSNamedType(TSAlias($name, TypescriptType.nameOrType(${getTSType(singleChild.asType.toType)}.get)))
         }"""

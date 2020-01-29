@@ -1,4 +1,5 @@
-package nl.codestar.scalatsi
+package nl.codestar
+package scalatsi
 
 import nl.codestar.scalatsi.TypescriptType._
 
@@ -32,13 +33,11 @@ object TypescriptTypeSerializer {
 
   // Unfortunately no vararg generics in scala
   def emit[T](implicit tsType: TSNamedType[T]): String =
-    emits(tsType.get)
+    emits(tsType)
 
-  def emits(types: TypescriptNamedType*): String =
-    types.toSet
-      .flatMap(discoverNestedNames)
-      .toSeq
-      .map(emitNamed)
+  def emits(types: TSNamedType[_]*): String =
+    discoverNestedNames(types).iterator
+      .flatMap(emitNamed)
       .mkString("\n")
 
   private object TSInterfaceEntry {
@@ -50,7 +49,7 @@ object TypescriptTypeSerializer {
       }
   }
 
-  private def emitNamed(named: TypescriptNamedType): String = named match {
+  private def emitNamed(named: TypescriptNamedType): Opt[String] = named matchOpt {
     case TSAlias(name, underlying) =>
       s"export type $name = ${serialize(underlying)}"
 
@@ -63,8 +62,6 @@ object TypescriptTypeSerializer {
          |${mbs.mkString(",\n")}
          |}
        """.stripMargin
-
-    case _: TSTypeReference => ""
 
     case TSInterfaceIndexed(name, indexName, indexType, valueType) =>
       s"""export interface $name {
@@ -87,16 +84,25 @@ object TypescriptTypeSerializer {
        """.stripMargin
   }
 
-  // TODO: Optimize, Memoize or something, tail rec etc
-  private def discoverNestedNames(tp: TypescriptType): Set[TypescriptNamedType] = {
-    val me: Set[TypescriptNamedType] = tp match {
-      case named: TypescriptNamedType => Set(named)
-      case _                          => Set()
+  private def discoverNestedNames(rootTypes: Seq[TSNamedType[_]]): Vector[TypescriptNamedType] = {
+    val namesBuilder = MLinkedHashSet.empty[TypescriptNamedType]
+
+    def rec(tpe: TSType[_]): Unit = {
+      val descend = tpe.get match {
+        case named: TypescriptNamedType => namesBuilder.add(named)
+        case _                          => true
+      }
+
+      if (descend) {
+        tpe match {
+          case t: TSAggregateType => t.nested.foreach(rec)
+          case _                  =>
+        }
+      }
     }
-    tp match {
-      case TypescriptAggregateType(nested) =>
-        nested.flatMap(discoverNestedNames) ++ me
-      case _ => me
-    }
+
+    rootTypes.foreach(rec)
+    namesBuilder.toVector.reverse
   }
+
 }

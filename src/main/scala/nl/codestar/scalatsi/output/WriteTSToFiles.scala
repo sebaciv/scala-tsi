@@ -2,11 +2,10 @@ package nl.codestar.scalatsi.output
 
 import java.io.FileWriter
 
-import nl.codestar.scalatsi.TypescriptType.TypescriptNamedType
-import nl.codestar.scalatsi.TypescriptTypeSerializer
+import nl.codestar.scalatsi.{TSNamedType, TypescriptTypeSerializer}
 
 object WriteTSToFiles {
-  def write(options: OutputOptions)(types: Seq[TypescriptNamedType]): Unit = {
+  def write(options: OutputOptions)(types: Seq[TSNamedType[_]]): Unit = {
     val output = TypescriptTypeSerializer.emits(types: _*)
     if (!options.targetFile.exists()) {
       options.targetFile.createNewFile()

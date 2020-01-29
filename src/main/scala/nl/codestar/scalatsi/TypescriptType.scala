@@ -38,7 +38,7 @@ object TypescriptType {
   /** A marker trait for a TS type that has a name */
   sealed trait TypescriptNamedType extends TypescriptType {
     def name: String
-    require(isValidTSName(name), s"Not a valid TypeScript identifier: $name")
+    //require(isValidTSName(name), s"Not a valid TypeScript identifier: $name") TODO
 
     def asReference: TSTypeReference = TSTypeReference(name)
   }

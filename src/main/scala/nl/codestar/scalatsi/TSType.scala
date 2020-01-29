@@ -1,5 +1,6 @@
 package nl.codestar.scalatsi
 
+import com.avsystem.commons.derivation.{AllowImplicitMacro, DeferredInstance}
 import nl.codestar.scalatsi.TypescriptType._
 
 import scala.annotation.implicitNotFound
@@ -20,7 +21,7 @@ import scala.collection.immutable.ListMap
     )
  */
 
-@implicitNotFound("Could not find an implicit TSType[${T}] in scope. Did you create and import it?")
+@implicitNotFound("No TSType found for ${T}")
 trait TSType[T] { self =>
   def get: TypescriptType
   override def equals(obj: scala.Any): Boolean = obj match {
@@ -33,11 +34,54 @@ trait TSType[T] { self =>
   // Forwarders to the underlying TypescriptType
   def |(other: TypescriptType): TSUnion = get | other
   def |(other: TSType[_]): TSUnion      = this | other.get
+
+  def asReference: TypescriptType = this match {
+    case named: TSNamedType[_] => TSTypeReference(named.tpeName)
+    case tpe                   => tpe.get
+  }
 }
 
-object TSType {
+object TSType extends RecursiveAutoTSType {
   private class TSTypeImpl[T](override val get: TypescriptType) extends TSType[T]
+
+  final class Deferred[T] extends DeferredInstance[TSType[T]] with TSType[T] {
+    override def get: TypescriptType = underlying.get
+
+    override def hashCode(): Int = System.identityHashCode(underlying)
+    override def equals(obj: Any): Boolean = obj match {
+      case df: Deferred[_] => underlying eq df.underlying
+      case _               => false
+    }
+
+    override def toString: String = s"TSDeferred"
+  }
+
   def apply[T](tt: TypescriptType): TSType[T] = new TSTypeImpl(tt)
+
+  def transformed[T](tt: TSType[_])(f: TypescriptType => TypescriptType): TSType[T] =
+    new TSType[T] with TSAggregateType {
+      override def get: TypescriptType = f(tt.asReference)
+
+      override def nested: Seq[TSType[_]] = Seq(tt)
+    }
+
+  def transformed2[T](tt1: TSType[_], tt2: TSType[_])(f: (TypescriptType, TypescriptType) => TypescriptType): TSType[T] =
+    new TSType[T] with TSAggregateType {
+      override def get: TypescriptType = f(tt1.asReference, tt2.asReference)
+
+      override def nested: Seq[TSType[_]] = Seq(tt1, tt2)
+    }
+
+  def transformed3[T](tt1: TSType[_], tt2: TSType[_], tt3: TSType[_])(
+    f: (TypescriptType, TypescriptType, TypescriptType) => TypescriptType
+  ): TSType[T] =
+    new TSType[T] with TSAggregateType {
+      override def get: TypescriptType = f(tt1.asReference, tt2.asReference, tt2.asReference)
+
+      override def nested: Seq[TSType[_]] = Seq(tt1, tt2, tt3)
+    }
+
+  def materialize[T]: TSType[T] = macro TsTypeMacros.materialize[T]
 
   /** Get an implicit `TSType[T]` */
   def get[T](implicit tsType: TSType[T]): TSType[T] = tsType
@@ -77,7 +121,7 @@ object TSType {
     * @see alias
     **/
   def sameAs[Source, Target](implicit tsType: TSType[Target]): TSType[Source] =
-    TSType(tsType.get)
+    TSType.transformed(tsType)(identity)
 
   /** Create a Typescript alias "T" for type T, with the definition of Alias
     *
@@ -93,7 +137,10 @@ object TSType {
     * @see sameAs
     */
   def alias[T, Alias](name: String)(implicit tsType: TSType[Alias]): TSNamedType[T] =
-    alias(name, tsType.get)
+    new TSNamedType[T] {
+      override def tpeName: String          = name
+      override def get: TypescriptNamedType = TSAlias(tpeName, tsType.get)
+    }
 
   /** Create a Typescript alias "name" for type T, with the definition of tsType
     *
@@ -109,8 +156,7 @@ object TSType {
   def external[T](name: String): TSNamedType[T] =
     TypescriptType.fromString(name) match {
       case t: TSTypeReference => TSNamedType(t)
-      case t =>
-        throw new IllegalArgumentException(s"String $name is a predefined type $t")
+      case t                  => throw new IllegalArgumentException(s"String $name is a predefined type $t")
     }
 
   /** Create an interface "name" for T
@@ -138,16 +184,74 @@ object TSType {
     TSNamedType(TSInterfaceIndexed(name, indexName, indexType, valueType))
 }
 
+trait RecursiveAutoTSType { this: TSType.type =>
+
+  /**
+    * Like `materialize`, but descends into types that `T` is made of (e.g. case class field types).
+    */
+  def materializeRecursively[T]: TSType[T] =
+    macro TsTypeMacros.materializeRecursively[T]
+
+  /**
+    * INTERNAL API. Should not be used directly.
+    */
+  implicit def materializeImplicitly[T](implicit allow: AllowImplicitMacro[TSType[T]]): TSType[T] =
+    macro TsTypeMacros.materializeImplicitly[T]
+}
+
 @implicitNotFound(
   "Could not find an implicit TSNamedType[${T}] in scope. Make sure you created and imported a named typescript mapping for the type."
 )
 trait TSNamedType[T] extends TSType[T] { self =>
+  def tpeName: String
   def get: TypescriptNamedType
   override def toString: String = s"TSNamedType($get)"
 }
 
-object TSNamedType {
-  private class TSNamedTypeImpl[T](override val get: TypescriptNamedType) extends TSNamedType[T]
+trait TSAggregateType {
+  def nested: Seq[TSType[_]]
+}
+
+abstract class SealedHierarchyTSNamedType[T](
+  typeRepr: String
+) extends TSNamedType[T]
+    with TSAggregateType {
+
+  protected def caseDependencies: Array[TSType[_]]
+
+  private[this] lazy val caseDeps = caseDependencies
+
+  override def tpeName: String = typeRepr
+
+  override lazy val get: TypescriptNamedType = {
+    val types = caseDeps.iterator.map {
+      case named: TSNamedType[_] => TSTypeReference(named.tpeName)
+      case tpe                   => tpe.get
+    }.toVector
+    TSAlias(typeRepr, if (types.size == 1) types.head else TSUnion(types))
+  }
+
+  override def nested: Seq[TSType[_]] = caseDeps
+}
+
+object TSNamedType extends RecursiveAutoNamedTSType {
+  private class TSNamedTypeImpl[T](override val get: TypescriptNamedType) extends TSNamedType[T] {
+    override def tpeName: String = get.name
+  }
+
+  final class Deferred[T] extends DeferredInstance[TSNamedType[T]] with TSNamedType[T] {
+    override def tpeName: String          = underlying.tpeName
+    override def get: TypescriptNamedType = underlying.get
+
+    override def hashCode(): Int = System.identityHashCode(underlying)
+    override def equals(obj: Any): Boolean = obj match {
+      case df: Deferred[_] => underlying eq df.underlying
+      case _               => false
+    }
+
+    override def toString: String = s"TSNamedDeferred"
+  }
+
   def apply[T](tt: TypescriptNamedType): TSNamedType[T] =
     new TSNamedTypeImpl(tt)
 
@@ -159,6 +263,23 @@ object TSNamedType {
     * @see [[TSType.getOrGenerate]]
     **/
   def getOrGenerate[T]: TSNamedType[T] = macro Macros.getImplicitMappingOrGenerateDefault[T, TSNamedType]
+
+  def materialize[T]: TSNamedType[T] = macro TsTypeMacros.materialize[T]
+}
+
+trait RecursiveAutoNamedTSType { this: TSNamedType.type =>
+
+  /**
+    * Like `materialize`, but descends into types that `T` is made of (e.g. case class field types).
+    */
+  def materializeRecursively[T]: TSNamedType[T] =
+    macro TsTypeMacros.materializeRecursively[T]
+
+  /**
+    * INTERNAL API. Should not be used directly.
+    */
+  implicit def materializeImplicitly[T](implicit allow: AllowImplicitMacro[TSNamedType[T]]): TSNamedType[T] =
+    macro TsTypeMacros.materializeImplicitly[T]
 }
 
 @implicitNotFound(
@@ -169,8 +290,35 @@ trait TSIType[T] extends TSNamedType[T] { self =>
   override def toString: String = s"TSIType($get)"
 }
 
+abstract class ProductTSIType[T](
+  name: String,
+  fieldNames: Array[String]
+) extends TSIType[T]
+    with TSAggregateType {
+  protected def dependencies: Array[TSType[_]]
+
+  private[this] lazy val deps = dependencies
+
+  override def tpeName: String = s"I$name"
+
+  override lazy val get: TSInterface = {
+    val fields = fieldNames.iterator.zipWithIndex.map {
+      case (name, idx) =>
+        name -> (deps(idx) match {
+          case named: TSNamedType[_] => TSTypeReference(named.tpeName)
+          case tpe                   => tpe.get
+        })
+    }.toSeq
+    TSInterface(tpeName, ListMap(fields: _*))
+  }
+
+  override def nested: Seq[TSType[_]] = deps
+}
+
 object TSIType {
-  private class TSITypeImpl[T](override val get: TSInterface) extends TSIType[T]
+  private class TSITypeImpl[T](override val get: TSInterface) extends TSIType[T] {
+    override def tpeName: String = get.name
+  }
   def apply[T](tt: TSInterface): TSIType[T] = new TSITypeImpl(tt)
 
   /** Get an implicit TSIType[T] */
